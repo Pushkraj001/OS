@@ -3,93 +3,104 @@
 #include <unistd.h>
 using namespace std;
 
-class monitor {
+// Monitor class definition
+class Monitor {
 private:
-    int rcnt, wcnt, waitr, waitw;
-    pthread_cond_t canread, canwrite;
-    pthread_mutex_t condlock;
+    int readerCount, writerCount, waitingReaders, waitingWriters;
+    pthread_cond_t canRead, canWrite;
+    pthread_mutex_t conditionLock;
 
 public:
-    monitor() {
-        rcnt = wcnt = waitr = waitw = 0;
-        pthread_cond_init(&canread, NULL);
-        pthread_cond_init(&canwrite, NULL);
-        pthread_mutex_init(&condlock, NULL);
+    // Constructor to initialize member variables and synchronization primitives
+    Monitor() {
+        readerCount = writerCount = waitingReaders = waitingWriters = 0;
+        pthread_cond_init(&canRead, NULL); // Initialize condition variable for readers
+        pthread_cond_init(&canWrite, NULL); // Initialize condition variable for writers
+        pthread_mutex_init(&conditionLock, NULL); // Initialize mutex lock
     }
 
-    void beginread(int i) {
-        pthread_mutex_lock(&condlock);
-        if (wcnt || waitw) {
-            waitr++;
-            pthread_cond_wait(&canread, &condlock);
-            waitr--;
+    // Method for readers to begin reading
+    void beginRead(int i) {
+        pthread_mutex_lock(&conditionLock); // Acquire mutex lock
+        // Check if there are active writers or writers waiting
+        if (writerCount || waitingWriters) {
+            waitingReaders++; // Increment count of waiting readers
+            pthread_cond_wait(&canRead, &conditionLock); // Wait for signal to read
+            waitingReaders--; // Decrement count of waiting readers after waking up
         }
-        rcnt++;
-        cout << "reader " << i << " is reading\n";
-        pthread_mutex_unlock(&condlock);
-        pthread_cond_broadcast(&canread);
+        readerCount++; // Increment count of active readers
+        cout << "Reader " << i << " is reading" << endl; // Print message indicating reader is reading
+        pthread_mutex_unlock(&conditionLock); // Release mutex lock
+        pthread_cond_broadcast(&canRead); // Broadcast signal to other readers
     }
 
-    void endread(int i) {
-        pthread_mutex_lock(&condlock);
-        if (--rcnt == 0)
-            pthread_cond_signal(&canwrite);
-        pthread_mutex_unlock(&condlock);
+    // Method for readers to end reading
+    void endRead(int i) {
+        pthread_mutex_lock(&conditionLock); // Acquire mutex lock
+        if (--readerCount == 0) // If no more active readers
+            pthread_cond_signal(&canWrite); // Signal waiting writers
+        pthread_mutex_unlock(&conditionLock); // Release mutex lock
     }
 
-    void beginwrite(int i) {
-        pthread_mutex_lock(&condlock);
-        if (wcnt || rcnt) {
-            ++waitw;
-            pthread_cond_wait(&canwrite, &condlock);
-            --waitw;
+    // Method for writers to begin writing
+    void beginWrite(int i) {
+        pthread_mutex_lock(&conditionLock); // Acquire mutex lock
+        // Check if there are active readers or writers
+        if (writerCount || readerCount) {
+            waitingWriters++; // Increment count of waiting writers
+            pthread_cond_wait(&canWrite, &conditionLock); // Wait for signal to write
+            waitingWriters--; // Decrement count of waiting writers after waking up
         }
-        wcnt = 1;
-        cout << "writer " << i << " is writing\n";
-        pthread_mutex_unlock(&condlock);
+        writerCount = 1; // Set writer count to indicate writer is active
+        cout << "Writer " << i << " is writing" << endl; // Print message indicating writer is writing
+        pthread_mutex_unlock(&conditionLock); // Release mutex lock
     }
 
-    void endwrite(int i) {
-        pthread_mutex_lock(&condlock);
-        wcnt = 0;
-        if (waitr)
-            pthread_cond_signal(&canread);
+    // Method for writers to end writing
+    void endWrite(int i) {
+        pthread_mutex_lock(&conditionLock); // Acquire mutex lock
+        writerCount = 0; // Reset writer count to indicate writer has finished writing
+        if (waitingReaders) // If there are waiting readers
+            pthread_cond_signal(&canRead); // Signal waiting readers
         else
-            pthread_cond_signal(&canwrite);
-        pthread_mutex_unlock(&condlock);
+            pthread_cond_signal(&canWrite); // Signal waiting writers
+        pthread_mutex_unlock(&conditionLock); // Release mutex lock
     }
 };
 
-monitor M;
+Monitor M; // Declare Monitor object for synchronization
 
+// Reader thread function
 void* reader(void* id) {
-    int c = 0, i = *(int*)id;
-    while (c++ < 5) {
-        usleep(1);
-        M.beginread(i);
-        M.endread(i);
+    int count = 0, i = *(int*)id; // Initialize variables for loop count and reader ID
+    while (count++ < 5) { // Repeat reading process 5 times
+        usleep(1); // Sleep for a short period to simulate processing time
+        M.beginRead(i); // Call beginRead method of Monitor to start reading
+        M.endRead(i); // Call endRead method of Monitor to finish reading
     }
 }
 
+// Writer thread function
 void* writer(void* id) {
-    int c = 0, i = *(int*)id;
-    while (c++ < 5) {
-        usleep(1);
-        M.beginwrite(i);
-        M.endwrite(i);
+    int count = 0, i = *(int*)id; // Initialize variables for loop count and writer ID
+    while (count++ < 5) { // Repeat writing process 5 times
+        usleep(1); // Sleep for a short period to simulate processing time
+        M.beginWrite(i); // Call beginWrite method of Monitor to start writing
+        M.endWrite(i); // Call endWrite method of Monitor to finish writing
     }
 }
 
 int main() {
-    pthread_t r[5], w[5];
-    int id[5];
-    for (int i = 0; i < 5; i++) {
-        id[i] = i;
-        pthread_create(&r[i], NULL, &reader, &id[i]);
-        pthread_create(&w[i], NULL, &writer, &id[i]);
+    pthread_t readerThreads[5], writerThreads[5]; // Declare arrays for reader and writer threads
+    int id[5]; // Declare array for thread IDs
+    for (int i = 0; i < 5; i++) { // Loop to create reader and writer threads
+        id[i] = i; // Assign ID to each thread
+        pthread_create(&readerThreads[i], NULL, &reader, &id[i]); // Create reader thread
+        pthread_create(&writerThreads[i], NULL, &writer, &id[i]); // Create writer thread
     }
-    for (int i = 0; i < 5; i++) {
-        pthread_join(r[i], NULL);
-        pthread_join(w[i], NULL);
+    for (int i = 0; i < 5; i++) { // Loop to join reader and writer threads
+        pthread_join(readerThreads[i], NULL); // Join reader thread
+        pthread_join(writerThreads[i], NULL); // Join writer thread
     }
+    return 0; // Exit program
 }
